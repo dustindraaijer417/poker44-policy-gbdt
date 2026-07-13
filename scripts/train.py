@@ -3,7 +3,8 @@
 The model is trained on real human hands versus generated bot hands (see
 p44.realistic). Validation holds out one bot family at a time: the model is trained
 on the remaining families and evaluated against real humans and the held-out bot
-type, which it has never seen.
+type, which it has never seen. Training chunks are augmented to a range of sizes so
+the model scores short chunks as well as full-size ones.
 
 Scored with the validator's own reward() function, imported from the subnet package
 so it cannot drift from upstream.
@@ -19,7 +20,7 @@ import joblib
 import numpy as np
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-from p44.model import FLAG_RATE, BotDetector, calibrate, chunk_features, matrix
+from p44.model import FLAG_RATE, BotDetector, augment_chunks, calibrate, chunk_features, matrix
 from p44.payload import to_live_view
 from p44.realistic import all_families, build as build_realistic
 from poker44.score.scoring import reward
@@ -87,8 +88,10 @@ def main():
           f"{reward(calibrate(rng2.random(n)), yq)[0]:.3f}")
     print("  (the live field currently sits at ~0.54, i.e. exactly this floor)")
 
-    # ---- final model on everything -----------------------------------------
-    det = BotDetector(names).fit(X, y)
+    # ---- final model on everything, short-chunk hardened --------------------
+    import random as _random
+    av, ay, _ = augment_chunks(views, y.tolist(), fam.tolist(), _random.Random(99))
+    det = BotDetector(names).fit(matrix(av, names), np.asarray(ay, int))
     joblib.dump({"model": det, "feature_names": names}, os.path.join(OUT, "detector.joblib"))
     json.dump({
         "trained_on": "real human corpus vs SandboxPokerBot (upstream generator)",

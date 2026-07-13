@@ -16,6 +16,12 @@ Rank statistics are invariant to any monotone remap of the scores, so calibrate(
 remaps each batch monotonically such that a fixed top fraction (FLAG_RATE) lands
 at or above 0.5. This sets the operating point explicitly without altering the
 model's ranking.
+
+Short-chunk hardening
+---------------------
+The number of hands per chunk is not known ahead of time. augment_chunks expands
+the training set with variable-size sub-slices so the model scores short chunks
+well, not only full-size ones.
 """
 
 from __future__ import annotations
@@ -112,3 +118,26 @@ def calibrate(p: np.ndarray, flag_rate: float = FLAG_RATE) -> np.ndarray:
         0.5 * r / max(1e-9, cut),
     )
     return np.clip(out, 0.0, 1.0)
+
+
+# --- short-chunk hardening -------------------------------------------------
+# The chunk size is not known in advance. Training only on full-size chunks leaves
+# the model weaker on short ones; augment_chunks adds variable-size sub-slices so it
+# scores short chunks well too.
+AUG_SIZES = (6, 8, 10, 12, 15, 20, 30)
+
+
+def augment_chunks(views, y, fam, rng, per_chunk: int = 3):
+    """Expand a chunk set with `per_chunk` variable-size sub-slices of each chunk."""
+    out_v, out_y, out_f = [], [], []
+    for v, yy, ff in zip(views, y, fam):
+        out_v.append(v); out_y.append(yy); out_f.append(ff)
+        for _ in range(per_chunk):
+            size = rng.choice(AUG_SIZES)
+            if len(v) <= size:
+                sl = v
+            else:
+                start = rng.randint(0, len(v) - size)
+                sl = v[start:start + size]
+            out_v.append(sl); out_y.append(yy); out_f.append(ff)
+    return out_v, out_y, out_f
