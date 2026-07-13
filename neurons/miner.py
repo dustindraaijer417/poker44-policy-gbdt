@@ -7,8 +7,6 @@ applies the same projection so the distributions match.
 Scores are rank-calibrated per batch (see p44.model.calibrate).
 """
 
-from __future__ import annotations
-
 import time
 import traceback
 from pathlib import Path
@@ -20,12 +18,86 @@ import numpy as np
 
 from p44.model import calibrate, matrix
 from poker44.base.miner import BaseMinerNeuron
+from poker44.base.neuron import BaseNeuron
 from poker44.utils.model_manifest import (
     build_local_model_manifest,
     evaluate_manifest_compliance,
     manifest_digest,
 )
 from poker44.validator.synapse import DetectionSynapse
+
+
+def _install_config_shim() -> None:
+    """Backfill the custom config fields dropped by newer bittensor.
+
+    The subnet's argparse defines ``--netuid`` and a ``--neuron.*`` namespace, but
+    bittensor >= 10.4 builds ``bt.Config`` in a way that discards these custom
+    entries (its own namespaces such as ``axon``/``wallet`` survive). The result:
+    ``config.netuid`` is ``None`` -- so ``metagraph(None)`` is sent to the chain
+    and its runtime traps in ``get_neurons_lite`` -- and ``config.neuron`` is
+    ``None``, which crashes ``check_config``. We wrap ``BaseNeuron.config`` to
+    reconstruct both from the subnet's own argument defaults (parsing ``--netuid``
+    from argv). On older bittensor, where these survive, the shim is a no-op.
+    """
+    import argparse
+    import sys
+
+    original = BaseNeuron.config.__func__
+
+    def _argv() -> argparse.Namespace:
+        parser = argparse.ArgumentParser(add_help=False)
+        parser.add_argument("--netuid", type=int, default=126)
+        parser.add_argument("--wallet.name", dest="wallet_name", default=None)
+        parser.add_argument("--wallet.hotkey", dest="wallet_hotkey", default=None)
+        parser.add_argument("--blacklist.force_validator_permit",
+                            dest="force_permit", action="store_true", default=True)
+        parser.add_argument("--no-blacklist.force_validator_permit",
+                            dest="force_permit", action="store_false")
+        parser.add_argument("--blacklist.allow_non_registered",
+                            dest="allow_non_registered", action="store_true", default=False)
+        parser.add_argument("--blacklist.allowed_validator_hotkeys",
+                            dest="allowed_hotkeys", nargs="*", default=[])
+        known, _ = parser.parse_known_args(sys.argv[1:])
+        return known
+
+    def config_with_shim(cls):
+        cfg = original(cls)
+        argv = _argv()
+        if cfg.get("netuid") is None:
+            cfg.netuid = int(argv.netuid)
+        # bittensor >= 10.4 leaves wallet name/hotkey at "default" instead of the
+        # value passed on the command line; restore them from argv.
+        if argv.wallet_name and cfg.wallet.get("name") in (None, "default"):
+            cfg.wallet.name = argv.wallet_name
+        if argv.wallet_hotkey and cfg.wallet.get("hotkey") in (None, "default"):
+            cfg.wallet.hotkey = argv.wallet_hotkey
+        # The whole ``blacklist`` namespace is a custom one and gets dropped too;
+        # BaseMinerNeuron reads config.blacklist.force_validator_permit on init.
+        if cfg.get("blacklist") is None:
+            blacklist = bt.Config()
+            blacklist.force_validator_permit = bool(argv.force_permit)
+            blacklist.allow_non_registered = bool(argv.allow_non_registered)
+            blacklist.allowed_validator_hotkeys = list(argv.allowed_hotkeys or [])
+            cfg.blacklist = blacklist
+        if cfg.get("neuron") is None:
+            neuron = bt.Config()
+            neuron.name = "poker44-miner"
+            neuron.device = "cpu"
+            neuron.epoch_length = 50
+            neuron.disable_set_weights = False
+            neuron.moving_average_alpha = 0.1
+            neuron.num_concurrent_forwards = 1
+            neuron.timeout = 180.0
+            neuron.axon_off = False
+            neuron.wait_for_inclusion = False
+            neuron.wait_for_finalization = False
+            cfg.neuron = neuron
+        return cfg
+
+    BaseNeuron.config = classmethod(config_with_shim)
+
+
+_install_config_shim()
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT = REPO_ROOT / "artifacts" / "detector.joblib"
