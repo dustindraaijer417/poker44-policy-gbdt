@@ -15,7 +15,7 @@ ALLOWED_VALIDATOR_HOTKEYS="${ALLOWED_VALIDATOR_HOTKEYS:-}"
 
 # The manifest must identify the code actually being served. repo_commit is
 # regex-checked by the validator and a mismatch can zero the miner's score.
-export POKER44_MODEL_REPO_URL="${POKER44_MODEL_REPO_URL:?set POKER44_MODEL_REPO_URL to the public repo}"
+export POKER44_MODEL_REPO_URL="${POKER44_MODEL_REPO_URL:-https://github.com/dustindraaijer417/poker44-policy-gbdt}"
 export POKER44_MODEL_REPO_COMMIT="${POKER44_MODEL_REPO_COMMIT:-$(git rev-parse HEAD)}"
 export PYTHONPATH="$REPO_DIR"
 
