@@ -1,0 +1,25 @@
+{
+  "trained_on": "real human corpus vs SandboxPokerBot (upstream generator)",
+  "n_chunks": 3900,
+  "n_features": 142,
+  "bot_families": [
+    "balanced",
+    "loose_aggressive",
+    "loose_passive",
+    "maniac",
+    "mimic",
+    "nit",
+    "solver_aggressive",
+    "solver_balanced",
+    "solver_tight",
+    "stealth",
+    "tight_aggressive",
+    "tight_passive",
+    "trappy"
+  ],
+  "lofo_mean_reward": 0.9563892586158631,
+  "lofo_mean_ap": 0.933859420221147,
+  "lofo_worst_ap": 0.8610651455205706,
+  "flag_rate": 0.07,
+  "excludes": "all table/pooled features and hero counts (table-composition artifacts)"
+}
