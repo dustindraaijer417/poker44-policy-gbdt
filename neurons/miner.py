@@ -16,6 +16,7 @@ import bittensor as bt
 import joblib
 import numpy as np
 
+from p44 import live_probe
 from p44.rank_norm import chunk_tie_key, exact_rank_map, rank_normalize
 from p44.v4_features import extract_v4
 from poker44.base.miner import BaseMinerNeuron
@@ -106,6 +107,7 @@ IMPLEMENTATION_FILES = [
     REPO_ROOT / "neurons" / "miner.py",
     REPO_ROOT / "p44" / "v4_features.py",
     REPO_ROOT / "p44" / "rank_norm.py",
+    REPO_ROOT / "p44" / "live_probe.py",
     REPO_ROOT / "p44" / "model.py",
     REPO_ROOT / "p44" / "payload.py",
 ]
@@ -234,6 +236,7 @@ class Miner(BaseMinerNeuron):
     async def forward(self, synapse: DetectionSynapse) -> DetectionSynapse:
         chunks = synapse.chunks or []
         started = time.time()
+        live_probe.record(chunks)   # shape statistics only; no content retained
         try:
             scores = self.score_chunks(chunks)
         except Exception:

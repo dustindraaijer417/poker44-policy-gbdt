@@ -1,0 +1,16 @@
+{
+  "loro_auc_live_mean": 0.886687983113486,
+  "loro_auc_live_std": 0.051188442757141545,
+  "loro_auc_live_worst": 0.7806324110671936,
+  "loro_ap_live_mean": 0.9126393391427173,
+  "loro_reward_mean": 0.8813625363171576,
+  "n_features": 1768,
+  "branches": [
+    "lgbm",
+    "xgb",
+    "extratrees",
+    "rf",
+    "logistic"
+  ],
+  "flag_fraction": 0.1
+}
