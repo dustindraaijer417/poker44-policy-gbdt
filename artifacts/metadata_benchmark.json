@@ -1,0 +1,8 @@
+{
+  "trained_on": "public Poker44 benchmark (all releases), live-view projected",
+  "n_groups": 2712,
+  "n_features": 216,
+  "loro_mean_auc": 0.9004641780192814,
+  "loro_mean_ap": 0.917177120706595,
+  "loro_worst_auc": 0.8628808864265928
+}

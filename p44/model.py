@@ -141,3 +141,26 @@ def augment_chunks(views, y, fam, rng, per_chunk: int = 3):
                 sl = v[start:start + size]
             out_v.append(sl); out_y.append(yy); out_f.append(ff)
     return out_v, out_y, out_f
+
+
+# --- benchmark-supervised model -------------------------------------------
+# Live evidence (see README) showed the policy-only feature set carried no signal
+# on the task validators actually score. The deployed model is now trained on the
+# public benchmark with the FULL feature set; these helpers are its inference path.
+
+
+def full_chunk_features(chunk: List[dict]) -> Dict[str, float]:
+    """Every feature family: pooled/table, hero, consistency, relative, policy."""
+    feats = dict(extract(chunk))
+    feats.update(extract_policy(chunk))
+    return feats
+
+
+def full_matrix(chunks: Sequence[List[dict]], names: Sequence[str]) -> np.ndarray:
+    rows = [[f.get(n, 0.0) for n in names] for f in (full_chunk_features(c) for c in chunks)]
+    return np.nan_to_num(np.asarray(rows, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def ensemble_predict(models, X: np.ndarray) -> np.ndarray:
+    """Mean probability across the saved ensemble members."""
+    return np.mean([m.predict_proba(X)[:, 1] for m in models], axis=0)

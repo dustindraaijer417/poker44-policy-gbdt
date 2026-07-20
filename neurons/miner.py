@@ -16,7 +16,7 @@ import bittensor as bt
 import joblib
 import numpy as np
 
-from p44.model import calibrate, matrix
+from p44.model import calibrate, ensemble_predict, full_matrix
 from poker44.base.miner import BaseMinerNeuron
 from poker44.base.neuron import BaseNeuron
 from poker44.utils.model_manifest import (
@@ -100,7 +100,7 @@ def _install_config_shim() -> None:
 _install_config_shim()
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-ARTIFACT = REPO_ROOT / "artifacts" / "detector.joblib"
+ARTIFACT = REPO_ROOT / "artifacts" / "detector_benchmark.joblib"
 IMPLEMENTATION_FILES = [
     REPO_ROOT / "neurons" / "miner.py",
     REPO_ROOT / "p44" / "features.py",
@@ -115,11 +115,11 @@ class Miner(BaseMinerNeuron):
         super().__init__(config=config)
 
         blob = joblib.load(ARTIFACT)
-        self.detector = blob["model"]
+        self.models = blob["models"]
         self.feature_names = blob["feature_names"]
         bt.logging.info(
-            f"Loaded detector: {len(self.feature_names)} features, "
-            f"{len(self.detector.models)} ensemble members"
+            f"Loaded {blob.get('kind', 'detector')}: {len(self.feature_names)} features, "
+            f"{len(self.models)} ensemble members"
         )
 
         self.model_manifest = self._build_manifest()
@@ -141,31 +141,33 @@ class Miner(BaseMinerNeuron):
             repo_root=REPO_ROOT,
             implementation_files=IMPLEMENTATION_FILES,
             defaults={
-                "model_name": "poker44-policy-gbdt",
-                "model_version": "2.0",
+                "model_name": "poker44-benchmark-gbdt",
+                "model_version": "3.0",
                 "framework": "scikit-learn",
                 "license": "MIT",
                 "open_source": True,
                 "inference_mode": "remote",
                 "notes": (
-                    "Chunk-level bot detector. Context-conditioned policy features "
-                    "(P(response | street, facing-bet), bet-sizing dispersion, session "
-                    "aggression drift) for the focal seat only. Table-level features are "
-                    "deliberately excluded: humans and bots share tables live, so table "
-                    "aggregates carry no signal. Shallow GBDT ensemble; per-batch rank "
-                    "calibration against the 0.5 decision threshold."
+                    "Chunk-level bot detector. Full behavioral feature set over the "
+                    "miner-visible payload: action-mix and street distribution, bet-sizing "
+                    "level and dispersion, hero-conditioned rates, hero-vs-table contrast, "
+                    "and context-conditioned policy features (P(response | street, "
+                    "facing-bet)). Gradient-boosted tree ensemble plus a regularized linear "
+                    "model; per-batch rank calibration against the 0.5 decision threshold. "
+                    "Hands are projected through the validator canonicalizer and training "
+                    "chunks are augmented to varying sizes."
                 ),
                 "training_data_statement": (
-                    "Trained on the public real-human hand corpus shipped with the Poker44 "
-                    "subnet repo (hands_generator/human_hands/poker_hands_combined.json.gz) "
-                    "as the human class, versus bot hands generated with Poker44's own "
-                    "open-source SandboxPokerBot (hands_generator/bot_hands/, recovered from "
-                    "the upstream git history) across 8 behavior profiles. No validator-only "
-                    "or private evaluation data was used."
+                    "Trained on the public Poker44 training benchmark served by "
+                    "https://api.poker44.net/api/v1/benchmark (all released chunk groups, "
+                    "2026-05-30..2026-07-20), using the published groundTruth labels. Every "
+                    "hand is projected through poker44.validator.payload_view."
+                    "prepare_hand_for_miner before featurization. Validation is "
+                    "leave-one-release-out: mean AUC 0.90 / AP 0.92 on held-out release "
+                    "dates. No validator-only or private evaluation data was used."
                 ),
                 "training_data_sources": [
-                    "https://github.com/Poker44/Poker44-subnet (hands_generator/human_hands)",
-                    "https://github.com/Poker44/Poker44-subnet (hands_generator/bot_hands, historical)",
+                    "https://api.poker44.net/api/v1/benchmark",
                 ],
                 "private_data_attestation": (
                     "This model does not train on validator-only evaluation data, and does "
@@ -176,9 +178,9 @@ class Miner(BaseMinerNeuron):
         # build_local_model_manifest omits data_attestation, but validator policy
         # checks for it, so it is injected here after the build.
         manifest["data_attestation"] = (
-            "All training data is public and ships with the open-source Poker44 subnet repo: "
-            "the released human hand corpus and hands generated by the repo's own bot. No "
-            "private hand histories, no player PII, no validator evaluation material."
+            "All training data is the public Poker44 training benchmark, retrieved from the "
+            "public benchmark API. No private hand histories, no player PII, no validator "
+            "evaluation material."
         )
         return manifest
 
@@ -186,8 +188,8 @@ class Miner(BaseMinerNeuron):
         """One calibrated bot-risk score per chunk."""
         if not chunks:
             return []
-        X = matrix(chunks, self.feature_names)
-        return [round(float(s), 6) for s in calibrate(self.detector.predict_raw(X))]
+        X = full_matrix(chunks, self.feature_names)
+        return [round(float(s), 6) for s in calibrate(ensemble_predict(self.models, X))]
 
     def _fallback(self, chunks: List[List[dict]]) -> List[float]:
         """Deterministic degraded path.
