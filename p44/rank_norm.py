@@ -107,7 +107,7 @@ def chunk_tie_key(chunk: List[Dict[str, Any]]) -> str:
 
 def exact_rank_map(
     scores: Sequence[float],
-    fraction: float = 0.10,
+    fraction: float = 0.08,
     tie_keys: Sequence[str] | None = None,
     positive_floor: float = 0.501,
     positive_ceiling: float = 0.98,
