@@ -5,3 +5,6 @@ __pycache__/
 data/
 .venv
 start_miner.sh
+
+artifacts/detector_v6.joblib
+artifacts/metadata_v6.json
