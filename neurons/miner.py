@@ -16,7 +16,8 @@ import bittensor as bt
 import joblib
 import numpy as np
 
-from p44.model import calibrate, ensemble_predict, full_matrix
+from p44.rank_norm import chunk_tie_key, exact_rank_map, rank_normalize
+from p44.v4_features import extract_v4
 from poker44.base.miner import BaseMinerNeuron
 from poker44.base.neuron import BaseNeuron
 from poker44.utils.model_manifest import (
@@ -100,11 +101,11 @@ def _install_config_shim() -> None:
 _install_config_shim()
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-ARTIFACT = REPO_ROOT / "artifacts" / "detector_benchmark.joblib"
+ARTIFACT = REPO_ROOT / "artifacts" / "detector_v5.joblib"
 IMPLEMENTATION_FILES = [
     REPO_ROOT / "neurons" / "miner.py",
-    REPO_ROOT / "p44" / "features.py",
-    REPO_ROOT / "p44" / "policy_features.py",
+    REPO_ROOT / "p44" / "v4_features.py",
+    REPO_ROOT / "p44" / "rank_norm.py",
     REPO_ROOT / "p44" / "model.py",
     REPO_ROOT / "p44" / "payload.py",
 ]
@@ -117,6 +118,7 @@ class Miner(BaseMinerNeuron):
         blob = joblib.load(ARTIFACT)
         self.models = blob["models"]
         self.feature_names = blob["feature_names"]
+        self.flag_fraction = float(blob.get("flag_fraction", 0.10))
         bt.logging.info(
             f"Loaded {blob.get('kind', 'detector')}: {len(self.feature_names)} features, "
             f"{len(self.models)} ensemble members"
@@ -141,30 +143,32 @@ class Miner(BaseMinerNeuron):
             repo_root=REPO_ROOT,
             implementation_files=IMPLEMENTATION_FILES,
             defaults={
-                "model_name": "poker44-benchmark-gbdt",
-                "model_version": "3.0",
+                "model_name": "poker44-rank-robust",
+                "model_version": "5.0",
                 "framework": "scikit-learn",
                 "license": "MIT",
                 "open_source": True,
                 "inference_mode": "remote",
                 "notes": (
-                    "Chunk-level bot detector. Full behavioral feature set over the "
-                    "miner-visible payload: action-mix and street distribution, bet-sizing "
-                    "level and dispersion, hero-conditioned rates, hero-vs-table contrast, "
-                    "and context-conditioned policy features (P(response | street, "
-                    "facing-bet)). Gradient-boosted tree ensemble plus a regularized linear "
-                    "model; per-batch rank calibration against the 0.5 decision threshold. "
-                    "Hands are projected through the validator canonicalizer and training "
-                    "chunks are augmented to varying sizes."
+                    "Chunk-level bot detector. Chunk-size-invariant behavioral features "
+                    "(per-hand action-mix and entropy rates, pot-relative bet sizing, "
+                    "action-token n-grams with a frozen vocabulary, and sequence-repetition "
+                    "statistics on a fixed subsample). Features are rank-normalized within "
+                    "each request so the serving distribution matches training regardless of "
+                    "chunk length or bet scale. LightGBM ensemble plus a regularized linear "
+                    "model. Output is an order-preserving rank map that places a fixed top "
+                    "fraction above the 0.5 decision threshold, with ties broken by a "
+                    "content hash so scores do not depend on request ordering."
                 ),
                 "training_data_statement": (
                     "Trained on the public Poker44 training benchmark served by "
                     "https://api.poker44.net/api/v1/benchmark (all released chunk groups, "
-                    "2026-05-30..2026-07-20), using the published groundTruth labels. Every "
-                    "hand is projected through poker44.validator.payload_view."
-                    "prepare_hand_for_miner before featurization. Validation is "
-                    "leave-one-release-out: mean AUC 0.90 / AP 0.92 on held-out release "
-                    "dates. No validator-only or private evaluation data was used."
+                    "2026-05-30..2026-07-20), using the published groundTruth labels. Hands "
+                    "are projected through poker44.validator.payload_view.prepare_hand_for_miner "
+                    "before featurization, and training chunks are merged to the chunk sizes "
+                    "seen in production. Validation is leave-one-release-out at production "
+                    "chunk size: mean AUC 0.887, AP 0.912 over 15 held-out release dates. No "
+                    "validator-only or private evaluation data was used."
                 ),
                 "training_data_sources": [
                     "https://api.poker44.net/api/v1/benchmark",
@@ -185,11 +189,27 @@ class Miner(BaseMinerNeuron):
         return manifest
 
     def score_chunks(self, chunks: List[List[dict]]) -> List[float]:
-        """One calibrated bot-risk score per chunk."""
+        """One calibrated bot-risk score per chunk.
+
+        Features are rank-normalized *within this request*, which is how the model
+        was trained (ranks computed inside each release). That makes the serving
+        distribution match training regardless of how many hands the validator puts
+        in a chunk or what scale its pots and bets are on.
+
+        The final mapping places exactly the top `flag_fraction` above 0.5 while
+        preserving the model's ordering, so the reward's rank terms are untouched
+        and its hard-threshold terms are pinned.
+        """
         if not chunks:
             return []
-        X = full_matrix(chunks, self.feature_names)
-        return [round(float(s), 6) for s in calibrate(ensemble_predict(self.models, X))]
+        rows = [[f.get(n, 0.0) for n in self.feature_names]
+                for f in (extract_v4(c) for c in chunks)]
+        X = np.nan_to_num(np.asarray(rows, dtype=np.float64),
+                          nan=0.0, posinf=0.0, neginf=0.0)
+        Xr = rank_normalize(X)
+        raw = np.mean([m.predict_proba(Xr)[:, 1] for m in self.models], axis=0)
+        return exact_rank_map(raw, self.flag_fraction,
+                              tie_keys=[chunk_tie_key(c) for c in chunks])
 
     def _fallback(self, chunks: List[List[dict]]) -> List[float]:
         """Deterministic degraded path.
@@ -208,7 +228,8 @@ class Miner(BaseMinerNeuron):
                         if act.get("action_type") in ("bet", "raise"):
                             hero_aggro += 1.0
             crude.append(hero_aggro / n if n else 0.5)
-        return [round(float(s), 6) for s in calibrate(np.asarray(crude))]
+        return exact_rank_map(crude, getattr(self, "flag_fraction", 0.10),
+                              tie_keys=[chunk_tie_key(c) for c in chunks])
 
     async def forward(self, synapse: DetectionSynapse) -> DetectionSynapse:
         chunks = synapse.chunks or []

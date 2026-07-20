@@ -1,0 +1,8 @@
+{
+  "loro_auc_bench": 0.9599147593284313,
+  "loro_auc_live": 0.8872993554725811,
+  "loro_ap_live": 0.9121566744630921,
+  "loro_reward_live": 0.873879341990936,
+  "n_features": 1768,
+  "flag_fraction": 0.1
+}
